@@ -5,11 +5,24 @@ from langchain.embeddings.base import Embeddings
 from langchain_core.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_classic.chains import RetrievalQA
-import os
-from langchain_classic.retrievers.contextual_compression import ContextualCompressionRetriever
+from langchain_classic.retrievers.contextual_compression import (
+    ContextualCompressionRetriever
+)
 from langchain_community.document_compressors import FlashrankRerank
-from langchain_core.caches import InMemoryCache
-from langchain_core.outputs import Generation
+
+# OLD CACHE IMPORTS
+# from langchain_core.caches import InMemoryCache
+# from langchain_core.outputs import Generation
+
+# NEW SEMANTIC CACHE IMPORTS
+from gptcache.adapter.api import init_similar_cache
+from gptcache import Cache
+from langchain_community.cache import GPTCache
+from langchain_core.globals import set_llm_cache
+
+import hashlib
+import os
+
 
 # ---------------- LOAD ENV ----------------
 
@@ -86,9 +99,14 @@ llm = ChatGoogleGenerativeAI(
     temperature=0.3
 )
 
+
+# ---------------- RERANKER ----------------
+
 compressor = FlashrankRerank()
+
 compression_retriever = ContextualCompressionRetriever(
-    base_compressor=compressor, base_retriever=retriever
+    base_compressor=compressor,
+    base_retriever=retriever
 )
 
 
@@ -103,14 +121,49 @@ qa_chain = RetrievalQA.from_chain_type(
     }
 )
 
-#---------------------Caching----------------------
-cache = InMemoryCache()
-llm_string = "gemini-2.5-flash"
+
+# =========================================================
+# ---------------- OLD  MATCH CACHE ------------------
+# =========================================================
+
+# cache = InMemoryCache()
+
+# llm_string = "gemini-2.5-flash"
+
+
+# =========================================================
+# ---------------- NEW SEMANTIC CACHE ---------------------
+# =========================================================
+
+def get_hashed_name(name):
+
+    return hashlib.sha256(
+        name.encode()
+    ).hexdigest()
+
+
+def init_gptcache(cache_obj: Cache, llm: str):
+
+    hashed_llm = get_hashed_name(llm)
+
+    init_similar_cache(
+        cache_obj=cache_obj,
+
+        data_dir=f"./similar_cache/{hashed_llm}",
+
+        # similarity_threshold=0.78
+    )
+
+
+# SET SEMANTIC CACHE
+set_llm_cache(
+    GPTCache(init_gptcache)
+)
 
 
 # ---------------- QUERY LOOP ----------------
 
-print("\nLPU RAG Bot Ready!\n")
+print("\nLPU RAG Bot Ready with Semantic Cache!\n")
 
 while True:
 
@@ -119,35 +172,54 @@ while True:
     if query.lower() == "exit":
         break
 
-    # Check cache
-    result = cache.lookup(
-        prompt=query,
-        llm_string=llm_string
-    )
 
-    if result:
+    # =====================================================
+    # -------------- OLD CACHE LOGIC ----------------
+    # =====================================================
 
-        print("\nAnswer (From Cache):\n")
+    # result = cache.lookup(
+    #     prompt=query,
+    #     llm_string=llm_string
+    # )
 
-        print(result[0].text)
+    # if result:
 
-        print("\n" + "-" * 50 + "\n")
+    #     print("\nAnswer (From Cache):\n")
 
-        continue
+    #     print(result[0].text)
 
-    # Generate fresh response
+    #     print("\n" + "-" * 50 + "\n")
+
+    #     continue
+
+
+    # =====================================================
+    # ------------------ NEW RAG FLOW ---------------------
+    # =====================================================
+
+    # GPTCache automatically:
+    # 1. Checks semantic similarity
+    # 2. Returns cached response if found
+    # 3. Otherwise calls Gemini
+    # 4. Stores response automatically
+
     response = qa_chain.invoke(
         {"query": query}
     )
 
     answer = response["result"]
 
-    # Store in cache
-    cache.update(
-        prompt=query,
-        llm_string=llm_string,
-        return_val=[Generation(text=answer)]
-    )
+
+    # =====================================================
+    # ------------ OLD MANUAL CACHE UPDATE ----------------
+    # =====================================================
+
+    # cache.update(
+    #     prompt=query,
+    #     llm_string=llm_string,
+    #     return_val=[Generation(text=answer)]
+    # )
+
 
     print("\nAnswer:\n")
 
